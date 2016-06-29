@@ -1,7 +1,9 @@
 #import "EditViewController.h"
 #import "DatabaseManager.h"
+#import "CloudKitManager.h"
 #import "MyTodo.h"
 
+@import CloudKit;
 
 @implementation EditViewController
 {
@@ -46,11 +48,14 @@
 	  [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemCancel
 	                                                target:self
 	                                                action:@selector(cancelButtonTapped:)];
-	
-	self.navigationItem.rightBarButtonItem =
-	  [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemSave
-	                                                target:self
-	                                                action:@selector(saveButtonTapped:)];
+    
+    UIBarButtonItem* shareButton = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemAction
+                                                                                 target:self
+                                                                                 action:@selector(shareTask)];
+    UIBarButtonItem* saveButton = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemSave
+                                                  target:self
+                                                  action:@selector(saveButtonTapped:)];
+	self.navigationItem.rightBarButtonItems = @[shareButton, saveButton];
 	
 	databaseConnection = MyDatabaseManager.uiDatabaseConnection;
 	[[NSNotificationCenter defaultCenter] addObserver:self
@@ -271,4 +276,18 @@
 	}
 }
 
+#pragma mark - Actions
+
+-(IBAction) shareTask
+{
+    [MyCloudKitManager shareRecordWithKey:todoID inCollection:Collection_Todos withCompletionHandler:^(UICloudSharingController *shareController, NSError *error) {
+        if (shareController) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                shareController.share[CKShareTypeKey] = @"Task";
+                shareController.share[CKShareTitleKey] = titleView.text;
+                [self presentViewController:shareController animated:YES completion:nil];
+            });
+        }
+    }];
+}
 @end

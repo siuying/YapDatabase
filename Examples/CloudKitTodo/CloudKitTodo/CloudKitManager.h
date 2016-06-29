@@ -66,4 +66,6 @@ extern CloudKitManager *MyCloudKitManager;
 **/
 - (void)refetchMissedRecordIDs:(NSArray *)recordIDs withCompletionHandler:(void (^)(NSError *error))completionHandler;
 
+- (void)shareRecordWithKey:(NSString*)key inCollection:(NSString*)collection withCompletionHandler:(void (^)(UICloudSharingController* shareController, NSError *error))completionHandler;
+
 @end

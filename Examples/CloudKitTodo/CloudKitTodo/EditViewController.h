@@ -21,4 +21,6 @@
 
 @property (nonatomic, weak) IBOutlet UILabel *baseRecordLabel;
 
+-(IBAction) shareTask;
+
 @end

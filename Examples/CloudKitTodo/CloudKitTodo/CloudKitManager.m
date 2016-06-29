@@ -752,6 +752,79 @@ static NSString *const Key_ServerChangeToken   = @"serverChangeToken";
 	[[[CKContainer defaultContainer] privateCloudDatabase] addOperation:operation];
 }
 
+- (void)shareRecordWithKey:(NSString*)key inCollection:(NSString*)collection withCompletionHandler:(void (^)(UICloudSharingController* shareController, NSError *error))completionHandler
+{
+    [databaseConnection asyncReadWriteWithBlock:^(YapDatabaseReadWriteTransaction * _Nonnull transaction) {
+        YapDatabaseCloudKitTransaction* ckTransaction = [transaction ext:Ext_CloudKit];
+        CKRecord* rootRecord = [ckTransaction recordForKey:key inCollection:collection];
+        
+        // Handle case when record not found
+        if (!rootRecord) {
+            NSLog(@"Record Not Found: %@ - %@", key, collection);
+            completionHandler(nil, [[NSError alloc] initWithDomain:@"RecordNotFound" code:1 userInfo:@{}]);
+            return;
+        }
+        
+        // Handle case when share already exists
+        if (rootRecord.share) {
+            NSLog(@"Share already exists: %@", rootRecord.share);
+            
+            // fetch existing share
+            CKContainer* container = [CKContainer defaultContainer];
+            CKDatabase* database = [container privateCloudDatabase];
+            [database fetchRecordWithID:rootRecord.share.recordID completionHandler:^(CKRecord * _Nullable record, NSError * _Nullable error) {
+                if (error) {
+                    NSLog(@"Error finding share record: %@", error);
+                    completionHandler(nil, error);
+                    return;
+                }
+                
+                if (record) {
+                    NSLog(@"share record found! %@", record);
+                    CKShare* share = (CKShare*) record;
+                    share.publicPermission = CKShareParticipantPermissionReadWrite;
+                    UICloudSharingController* controller = [self _createShareRecordControllerWithShare:share rootRecord:rootRecord];
+                    completionHandler(controller, nil);
+                }
+            }];
+            return;
+        }
+
+        // Otherwise: Create new share
+        CKShare* share = [[CKShare alloc] initWithRootRecord:rootRecord];
+        share.publicPermission = CKShareParticipantPermissionReadWrite;
+        UICloudSharingController* controller = [self _createShareRecordControllerWithShare:share rootRecord:rootRecord];
+        completionHandler(controller, nil);
+    }];
+}
+
+-(UICloudSharingController*) _createShareRecordControllerWithShare:(CKShare*)share rootRecord:(CKRecord*)rootRecord
+{
+    CKContainer* container = [CKContainer defaultContainer];
+    CKDatabase* privateDatabase = [container privateCloudDatabase];
+    UICloudSharingController *shareController = [[UICloudSharingController alloc] initWithShare:share preparationHandler:^(UICloudSharingController * _Nonnull controller, void (^ _Nonnull preparationCompletionHandler)(CKShare * _Nullable share, CKContainer * _Nullable container, NSError * _Nullable error)) {
+        CKModifyRecordsOperation *operation = [[CKModifyRecordsOperation alloc] initWithRecordsToSave:@[rootRecord, share]
+                                             recordIDsToDelete:nil];
+        [operation setPerRecordCompletionBlock:^(CKRecord * _Nullable record, NSError * _Nullable error) {
+            if (error) {
+                NSLog(@"Can't save record %@ due to error %@", record, error);
+            }
+        }];
+        [operation setModifyRecordsCompletionBlock:^(NSArray<CKRecord *> * _Nullable records,
+                                                     NSArray<CKRecordID *> * _Nullable ids,
+                                                     NSError * _Nullable error) {
+            if (error) {
+                NSLog(@"Error Share record saved: %@", error);
+            } else {
+                NSLog(@"Share Record: %@", share.URL.absoluteString);
+            }
+            preparationCompletionHandler(share, container, error);
+        }];
+        [privateDatabase addOperation:operation];
+    }];
+    return shareController;
+}
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 #pragma mark Error Handling
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
