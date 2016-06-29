@@ -815,10 +815,16 @@ static NSString *const Key_ServerChangeToken   = @"serverChangeToken";
                                                      NSError * _Nullable error) {
             if (error) {
                 NSLog(@"Error Share record saved: %@", error);
+                preparationCompletionHandler(share, container, error);
             } else {
+                // Merge the saved record to YapDatabase
                 NSLog(@"Share Record: %@", share.URL.absoluteString);
+                [databaseConnection asyncReadWriteWithBlock:^(YapDatabaseReadWriteTransaction *transaction) {
+                    [[transaction ext:Ext_CloudKit] mergeRecord:rootRecord databaseIdentifier:nil];
+                } completionBlock:^{
+                    preparationCompletionHandler(share, container, error);
+                }];
             }
-            preparationCompletionHandler(share, container, error);
         }];
         [privateDatabase addOperation:operation];
     }];
