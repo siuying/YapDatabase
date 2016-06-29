@@ -212,7 +212,8 @@
 				TargetAttributes = {
 					DCDE771A1A3023E9001D8FCE = {
 						CreatedOnToolsVersion = 6.1;
-						DevelopmentTeam = VT5GYGYX83;
+						DevelopmentTeam = 5UAR78B6YU;
+						DevelopmentTeamName = "Time Base Technology Limited";
 						SystemCapabilities = {
 							com.apple.BackgroundModes = {
 								enabled = 1;
@@ -443,7 +444,7 @@
 				INFOPLIST_FILE = CloudKitTodo/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 8.0;
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
-				PRODUCT_BUNDLE_IDENTIFIER = "com.4th-a.CloudKitTodo";
+				PRODUCT_BUNDLE_IDENTIFIER = com.goodnotesapp.CloudKitTodo;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE = "";
 			};
@@ -468,7 +469,7 @@
 				INFOPLIST_FILE = CloudKitTodo/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 8.0;
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
-				PRODUCT_BUNDLE_IDENTIFIER = "com.4th-a.CloudKitTodo";
+				PRODUCT_BUNDLE_IDENTIFIER = com.goodnotesapp.CloudKitTodo;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE = "";
 			};
