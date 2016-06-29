@@ -760,27 +760,27 @@ static NSString *const Key_ServerChangeToken   = @"serverChangeToken";
         
         // Handle case when record not found
         if (!rootRecord) {
-            NSLog(@"Record Not Found: %@ - %@", key, collection);
+            DDLogError(@"Record Not Found: %@ - %@", key, collection);
             completionHandler(nil, [[NSError alloc] initWithDomain:@"RecordNotFound" code:1 userInfo:@{}]);
             return;
         }
         
         // Handle case when share already exists
         if (rootRecord.share) {
-            NSLog(@"Share already exists: %@", rootRecord.share);
+            DDLogDebug(@"Share already exists: %@", rootRecord.share);
             
             // fetch existing share
             CKContainer* container = [CKContainer defaultContainer];
             CKDatabase* database = [container privateCloudDatabase];
             [database fetchRecordWithID:rootRecord.share.recordID completionHandler:^(CKRecord * _Nullable record, NSError * _Nullable error) {
                 if (error) {
-                    NSLog(@"Error finding share record: %@", error);
+                    DDLogError(@"Error finding share record: %@", error);
                     completionHandler(nil, error);
                     return;
                 }
                 
                 if (record) {
-                    NSLog(@"share record found! %@", record);
+                    DDLogInfo(@"share record found! %@", record);
                     CKShare* share = (CKShare*) record;
                     share.publicPermission = CKShareParticipantPermissionReadWrite;
                     UICloudSharingController* controller = [self _createShareRecordControllerWithShare:share rootRecord:rootRecord];
@@ -807,24 +807,25 @@ static NSString *const Key_ServerChangeToken   = @"serverChangeToken";
                                              recordIDsToDelete:nil];
         [operation setPerRecordCompletionBlock:^(CKRecord * _Nullable record, NSError * _Nullable error) {
             if (error) {
-                NSLog(@"Can't save record %@ due to error %@", record, error);
+                DDLogError(@"Can't save record %@ due to error %@", record, error);
             }
         }];
         [operation setModifyRecordsCompletionBlock:^(NSArray<CKRecord *> * _Nullable records,
                                                      NSArray<CKRecordID *> * _Nullable ids,
                                                      NSError * _Nullable error) {
             if (error) {
-                NSLog(@"Error Share record saved: %@", error);
+                DDLogError(@"Error Share record saved: %@", error);
                 preparationCompletionHandler(share, container, error);
-            } else {
-                // Merge the saved record to YapDatabase
-                NSLog(@"Share Record: %@", share.URL.absoluteString);
-                [databaseConnection asyncReadWriteWithBlock:^(YapDatabaseReadWriteTransaction *transaction) {
-                    [[transaction ext:Ext_CloudKit] mergeRecord:rootRecord databaseIdentifier:nil];
-                } completionBlock:^{
-                    preparationCompletionHandler(share, container, error);
-                }];
+                return;
             }
+
+            // adter modify succeed, merge the change to YapDatabase
+            DDLogInfo(@"Share Record: %@", share.URL.absoluteString);
+            [databaseConnection asyncReadWriteWithBlock:^(YapDatabaseReadWriteTransaction *transaction) {
+                [[transaction ext:Ext_CloudKit] mergeRecord:rootRecord databaseIdentifier:nil];
+            } completionBlock:^{
+                preparationCompletionHandler(share, container, error);
+            }];
         }];
         [privateDatabase addOperation:operation];
     }];
