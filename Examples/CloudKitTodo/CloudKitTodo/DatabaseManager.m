@@ -430,6 +430,7 @@ DatabaseManager *MyDatabaseManager;
 	
 	[cloudKitExtension suspend]; // Create zone(s)
 	[cloudKitExtension suspend]; // Create zone subscription(s)
+    [cloudKitExtension suspend]; // Create shared zone subscription(s)
 	[cloudKitExtension suspend]; // Initial fetchRecordChanges operation
 	
 	[database asyncRegisterExtension:cloudKitExtension withName:Ext_CloudKit completionBlock:^(BOOL ready) {
