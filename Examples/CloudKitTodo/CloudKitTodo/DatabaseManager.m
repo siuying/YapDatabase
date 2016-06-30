@@ -4,6 +4,7 @@
 
 #import "MyDatabaseObject.h"
 #import "MyTodo.h"
+#import "CloudKitHelpers.h"
 
 #import <CocoaLumberjack/CocoaLumberjack.h>
 #import <Reachability/Reachability.h>
@@ -416,10 +417,7 @@ DatabaseManager *MyDatabaseManager;
 	};
     
     YapDatabaseCloudKitDatabaseIdentifierBlock dbIdBlock = ^(NSString *databaseIdentifier) {
-        if ([databaseIdentifier isEqualToString:@"shared"]) {
-            return [[CKContainer defaultContainer] sharedCloudDatabase];
-        }
-        return [[CKContainer defaultContainer] privateCloudDatabase];
+        return CloudKitHelpers_DatabaseWithDatabaseIdentifier(databaseIdentifier);
     };
 	
 	NSSet *todos = [NSSet setWithObject:Collection_Todos];
