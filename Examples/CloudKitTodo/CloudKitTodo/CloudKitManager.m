@@ -19,6 +19,7 @@ CloudKitManager *MyCloudKitManager;
 
 static NSString *const Key_HasZone             = @"hasZone";
 static NSString *const Key_HasZoneSubscription = @"hasZoneSubscription";
+static NSString *const Key_HasShareSubscription = @"hasShareSubscription";
 static NSString *const Key_ServerChangeToken   = @"serverChangeToken";
 
 @interface CloudKitManager ()
@@ -26,6 +27,7 @@ static NSString *const Key_ServerChangeToken   = @"serverChangeToken";
 // Initial setup
 @property (atomic, readwrite) BOOL needsCreateZone;
 @property (atomic, readwrite) BOOL needsCreateZoneSubscription;
+@property (atomic, readwrite) BOOL needsSubscribeSharedSubscription;
 @property (atomic, readwrite) BOOL needsFetchRecordChangesAfterAppLaunch;
 
 // Error handling
@@ -82,7 +84,8 @@ static NSString *const Key_ServerChangeToken   = @"serverChangeToken";
 		self.needsCreateZone = YES;
 		self.needsCreateZoneSubscription = YES;
 		self.needsFetchRecordChangesAfterAppLaunch = YES;
-		
+        self.needsSubscribeSharedSubscription = YES;
+
 		[self configureCloudKit];
 		
 		[[NSNotificationCenter defaultCenter] addObserver:self
@@ -124,17 +127,18 @@ static NSString *const Key_ServerChangeToken   = @"serverChangeToken";
 	// (by checking database to see if we've flagged them as complete from previous app run)
 	
 	[databaseConnection readWithBlock:^(YapDatabaseReadTransaction *transaction) {
-		
-		if ([transaction hasObjectForKey:Key_HasZone inCollection:Collection_CloudKit])
-		{
+		if ([transaction hasObjectForKey:Key_HasZone inCollection:Collection_CloudKit]) {
 			self.needsCreateZone = NO;
 			[MyDatabaseManager.cloudKitExtension resume];
 		}
-		if ([transaction hasObjectForKey:Key_HasZoneSubscription inCollection:Collection_CloudKit])
-		{
+		if ([transaction hasObjectForKey:Key_HasZoneSubscription inCollection:Collection_CloudKit]) {
 			self.needsCreateZoneSubscription = NO;
 			[MyDatabaseManager.cloudKitExtension resume];
 		}
+        if ([transaction hasObjectForKey:Key_HasShareSubscription inCollection:Collection_CloudKit]) {
+            self.needsSubscribeSharedSubscription = NO;
+            [MyDatabaseManager.cloudKitExtension resume];
+        }
 	}];
 	
 	[self continueCloudKitFlow];
@@ -152,6 +156,10 @@ static NSString *const Key_ServerChangeToken   = @"serverChangeToken";
 	{
 		[self createZoneSubscription];
 	}
+    else if (self.needsSubscribeSharedSubscription)
+    {
+        [self createShareDatabaseSubscription];
+    }
 	else if (self.needsFetchRecordChangesAfterAppLaunch)
 	{
 		[self fetchRecordChangesAfterAppLaunch];
@@ -342,55 +350,85 @@ static NSString *const Key_ServerChangeToken   = @"serverChangeToken";
 
 - (void)_createZoneSubscription
 {
-	if (self.needsCreateZoneSubscription == NO)
-	{
-		dispatch_resume(setupQueue);
-		return;
-	}
-	
-	CKRecordZoneID *recordZoneID =
-	  [[CKRecordZoneID alloc] initWithZoneName:CloudKitZoneName ownerName:CKOwnerDefaultName];
-	
-	CKSubscription *subscription =
-	  [[CKSubscription alloc] initWithZoneID:recordZoneID subscriptionID:CloudKitZoneName options:0];
-	
-	CKModifySubscriptionsOperation *modifySubscriptionsOperation =
-	  [[CKModifySubscriptionsOperation alloc] initWithSubscriptionsToSave:@[ subscription ]
-	                                              subscriptionIDsToDelete:nil];
-	
-	modifySubscriptionsOperation.modifySubscriptionsCompletionBlock =
-	^(NSArray *savedSubscriptions, NSArray *deletedSubscriptionIDs, NSError *operationError)
-	{
-		if (operationError)
-		{
-			DDLogError(@"Error creating subscription: %@", operationError);
-		}
-		else
-		{
-			DDLogInfo(@"Successfully created subscription: %@", savedSubscriptions);
-			
-			// Create zone subscription complete.
-			self.needsCreateZoneSubscription = NO;
-			
-			// Decrement suspend count.
-			[MyDatabaseManager.cloudKitExtension resume];
-			
-			// Put flag in database so we know we can skip this operation next time
-			[databaseConnection asyncReadWriteWithBlock:^(YapDatabaseReadWriteTransaction *transaction) {
-				
-				[transaction setObject:@(YES) forKey:Key_HasZoneSubscription inCollection:Collection_CloudKit];
-			}];
-			
-			// Continue setup
-			[self continueCloudKitFlow];
-		}
-		
-		dispatch_resume(setupQueue);
-	};
-	
-	modifySubscriptionsOperation.allowsCellularAccess = YES;
-	
-	[[[CKContainer defaultContainer] privateCloudDatabase] addOperation:modifySubscriptionsOperation];
+    if (self.needsCreateZoneSubscription == NO)
+    {
+        dispatch_resume(setupQueue);
+        return;
+    }
+    
+    CKRecordZoneID *recordZoneID = [[CKRecordZoneID alloc] initWithZoneName:CloudKitZoneName ownerName:CKOwnerDefaultName];
+    CKSubscription *subscription = [[CKSubscription alloc] initWithZoneID:recordZoneID subscriptionID:CloudKitZoneName options:0];
+    CKModifySubscriptionsOperation *modifySubscriptionsOperation = [[CKModifySubscriptionsOperation alloc] initWithSubscriptionsToSave:@[ subscription ] subscriptionIDsToDelete:nil];
+
+    modifySubscriptionsOperation.modifySubscriptionsCompletionBlock =
+    ^(NSArray *savedSubscriptions, NSArray *deletedSubscriptionIDs, NSError *operationError)
+    {
+        if (operationError)
+        {
+            DDLogError(@"Error creating subscription: %@", operationError);
+        }
+        else
+        {
+            DDLogInfo(@"Successfully created subscription: %@", savedSubscriptions);
+            
+            // Create zone subscription complete.
+            self.needsCreateZoneSubscription = NO;
+            
+            // Decrement suspend count.
+            [MyDatabaseManager.cloudKitExtension resume];
+            
+            // Put flag in database so we know we can skip this operation next time
+            [databaseConnection asyncReadWriteWithBlock:^(YapDatabaseReadWriteTransaction *transaction) {
+                
+                [transaction setObject:@(YES) forKey:Key_HasZoneSubscription inCollection:Collection_CloudKit];
+            }];
+            
+            // Continue setup
+            [self continueCloudKitFlow];
+        }
+        
+        dispatch_resume(setupQueue);
+    };
+    
+    modifySubscriptionsOperation.allowsCellularAccess = YES;
+    
+    [[[CKContainer defaultContainer] privateCloudDatabase] addOperation:modifySubscriptionsOperation];
+}
+
+- (void)createShareDatabaseSubscription
+{
+    dispatch_async(setupQueue, ^{ @autoreleasepool {
+        
+        // Suspend the queue.
+        // We will resume it upon completion of the operation.
+        // This ensures that there is only one outstanding operation at a time.
+        dispatch_suspend(setupQueue);
+
+        [self _createShareDatabaseSubscription];
+    }});
+}
+
+- (void)_createShareDatabaseSubscription
+{
+    CKDatabaseSubscription *subscription = [[CKDatabaseSubscription alloc] init];
+    [[[CKContainer defaultContainer] sharedCloudDatabase] saveSubscription:subscription completionHandler:^(CKSubscription * _Nullable subscription, NSError * _Nullable error) {
+        if (error) {
+            NSLog(@"Shared DB subscription failed %@", error);
+
+        } else {
+            NSLog(@"Shared DB Subscription saved");
+            self.needsSubscribeSharedSubscription = NO;
+            
+            // Put flag in database so we know we can skip this operation next time
+            [databaseConnection asyncReadWriteWithBlock:^(YapDatabaseReadWriteTransaction *transaction) {
+                [transaction setObject:@(YES) forKey:Key_HasShareSubscription inCollection:Collection_CloudKit];
+            }];
+
+            // Continue setup
+            [self continueCloudKitFlow];
+        }
+        dispatch_resume(setupQueue);
+    }];
 }
 
 /**
