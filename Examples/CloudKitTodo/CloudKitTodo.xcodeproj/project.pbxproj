@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		54270E6E1D25094B005FADB6 /* CloudKitHelpers.m in Sources */ = {isa = PBXBuildFile; fileRef = 54270E6D1D25094B005FADB6 /* CloudKitHelpers.m */; };
 		8CDE399427C371AE35373288 /* libPods.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 951E571D3B3D45328846F778 /* libPods.a */; };
 		DC6071471A33F3FF00207DE9 /* TodoCell.m in Sources */ = {isa = PBXBuildFile; fileRef = DC6071461A33F3FF00207DE9 /* TodoCell.m */; };
 		DC60714A1A33FC3900207DE9 /* checkmark-off.png in Resources */ = {isa = PBXBuildFile; fileRef = DC6071481A33FC3900207DE9 /* checkmark-off.png */; };
@@ -28,6 +29,8 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		54270E6C1D25094B005FADB6 /* CloudKitHelpers.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = CloudKitHelpers.h; sourceTree = "<group>"; };
+		54270E6D1D25094B005FADB6 /* CloudKitHelpers.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = CloudKitHelpers.m; sourceTree = "<group>"; };
 		6E0153BF132BA4F8966C9CD2 /* Pods.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = Pods.debug.xcconfig; path = "Pods/Target Support Files/Pods/Pods.debug.xcconfig"; sourceTree = "<group>"; };
 		951E571D3B3D45328846F778 /* libPods.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = libPods.a; sourceTree = BUILT_PRODUCTS_DIR; };
 		C845CFA8C6F6A2549AFE15A6 /* Pods.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = Pods.release.xcconfig; path = "Pods/Target Support Files/Pods/Pods.release.xcconfig"; sourceTree = "<group>"; };
@@ -147,6 +150,8 @@
 		DCDE78781A302AD6001D8FCE /* Managers */ = {
 			isa = PBXGroup;
 			children = (
+				54270E6C1D25094B005FADB6 /* CloudKitHelpers.h */,
+				54270E6D1D25094B005FADB6 /* CloudKitHelpers.m */,
 				DCDE776E1A302A44001D8FCE /* DatabaseManager.h */,
 				DCDE776F1A302A44001D8FCE /* DatabaseManager.m */,
 				DCDE776C1A302A44001D8FCE /* CloudKitManager.h */,
@@ -320,6 +325,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				DCDE78801A302B29001D8FCE /* MyDatabaseObject.m in Sources */,
+				54270E6E1D25094B005FADB6 /* CloudKitHelpers.m in Sources */,
 				DCDE77771A302A66001D8FCE /* RootViewController.m in Sources */,
 				DCDE77701A302A44001D8FCE /* CloudKitManager.m in Sources */,
 				DCDE77761A302A66001D8FCE /* EditViewController.m in Sources */,
