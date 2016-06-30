@@ -149,15 +149,57 @@ AppDelegate *MyAppDelegate;
 	{
 		if (fetchResult == UIBackgroundFetchResultNewData) {
 			combinedFetchResult = UIBackgroundFetchResultNewData;
-		}
-		else if (fetchResult == UIBackgroundFetchResultFailed && combinedFetchResult == UIBackgroundFetchResultNoData) {
+		} else if (fetchResult == UIBackgroundFetchResultFailed && combinedFetchResult == UIBackgroundFetchResultNoData) {
 			combinedFetchResult = UIBackgroundFetchResultFailed;
 		}
-		
+
 		if (!moreComing) {
 			completionHandler(combinedFetchResult);
 		}
 	}];
+}
+
+@end
+
+@implementation AppDelegate (CloudKitShare)
+
+- (void)application:(UIApplication *)application userAcceptedCloudKitShareWithMetadata:(CKShareMetadata *)cloudKitShareMetadata
+{
+    DDLogInfo(@"App launched from shared data %@", cloudKitShareMetadata);
+    
+    UIAlertController *alert = [[UIAlertController alloc] init];
+    alert.title = @"Open invitation";
+    alert.message = [NSString stringWithFormat:@"Accept invitation to task \"%@\"?. The acceptance status is %ld",
+                     cloudKitShareMetadata.share[CKShareTitleKey],
+                     cloudKitShareMetadata.participantStatus];
+    
+    [alert addAction:[UIAlertAction actionWithTitle:@"YES"
+                                              style:UIAlertActionStyleDefault
+                                            handler:^(UIAlertAction * _Nonnull action) {
+                                                [self acceptCloudKitShareWithMetadata:cloudKitShareMetadata];
+                                            }]];
+    
+    [alert addAction:[UIAlertAction actionWithTitle:@"NO"
+                                              style:UIAlertActionStyleCancel
+                                            handler:^(UIAlertAction * _Nonnull action) {
+                                            }]];
+    
+    
+    [[UIApplication sharedApplication].keyWindow.rootViewController presentViewController:alert animated:YES completion:nil];
+}
+
+- (void)acceptCloudKitShareWithMetadata:(CKShareMetadata *)metadata
+{
+    CKContainer *_container = [CKContainer defaultContainer];
+    CKAcceptSharesOperation *operation = [[CKAcceptSharesOperation alloc] initWithShareMetadatas:@[metadata]];
+    [operation setPerShareCompletionBlock:^(CKShareMetadata * _Nonnull meta, CKShare * _Nullable share, NSError * _Nullable error) {
+        if (error) {
+            NSLog(@"Can't accept share with error %@", error);
+        } else {
+            NSLog(@"Share record is ready %@", share);
+        }
+    }];
+    [_container addOperation:operation];
 }
 
 @end
