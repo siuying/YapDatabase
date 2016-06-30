@@ -2,6 +2,7 @@
 #import "DatabaseManager.h"
 #import "AppDelegate.h"
 #import "MyTodo.h"
+#import "CloudKitHelpers.h"
 
 #import <CloudKit/CloudKit.h>
 #import <Reachability/Reachability.h>
@@ -21,6 +22,10 @@ static NSString *const Key_HasZone             = @"hasZone";
 static NSString *const Key_HasZoneSubscription = @"hasZoneSubscription";
 static NSString *const Key_HasShareSubscription = @"hasShareSubscription";
 static NSString *const Key_ServerChangeToken   = @"serverChangeToken";
+
+NSString* Key_ZoneChangeToken(CKRecordZoneID* recordZoneId) {
+    return [NSString stringWithFormat:@"serverChangeToken.%@.%@", recordZoneId.ownerName, recordZoneId.zoneName];
+}
 
 @interface CloudKitManager ()
 
@@ -250,6 +255,8 @@ static NSString *const Key_ServerChangeToken   = @"serverChangeToken";
 
 - (void)createZone
 {
+    DDLogInfo(@"%@ - %@", THIS_FILE, THIS_METHOD);
+
 	dispatch_async(setupQueue, ^{ @autoreleasepool {
 		
 		// Suspend the queue.
@@ -337,6 +344,8 @@ static NSString *const Key_ServerChangeToken   = @"serverChangeToken";
 
 - (void)createZoneSubscription
 {
+    DDLogInfo(@"%@ - %@", THIS_FILE, THIS_METHOD);
+
 	dispatch_async(setupQueue, ^{ @autoreleasepool {
 		
 		// Suspend the queue.
@@ -397,6 +406,8 @@ static NSString *const Key_ServerChangeToken   = @"serverChangeToken";
 
 - (void)createShareDatabaseSubscription
 {
+    DDLogInfo(@"%@ - %@", THIS_FILE, THIS_METHOD);
+
     dispatch_async(setupQueue, ^{ @autoreleasepool {
         
         // Suspend the queue.
@@ -410,25 +421,51 @@ static NSString *const Key_ServerChangeToken   = @"serverChangeToken";
 
 - (void)_createShareDatabaseSubscription
 {
-    CKDatabaseSubscription *subscription = [[CKDatabaseSubscription alloc] init];
-    [[[CKContainer defaultContainer] sharedCloudDatabase] saveSubscription:subscription completionHandler:^(CKSubscription * _Nullable subscription, NSError * _Nullable error) {
-        if (error) {
-            NSLog(@"Shared DB subscription failed %@", error);
-
-        } else {
-            NSLog(@"Shared DB Subscription saved");
-            self.needsSubscribeSharedSubscription = NO;
-            
-            // Put flag in database so we know we can skip this operation next time
-            [databaseConnection asyncReadWriteWithBlock:^(YapDatabaseReadWriteTransaction *transaction) {
-                [transaction setObject:@(YES) forKey:Key_HasShareSubscription inCollection:Collection_CloudKit];
+    CKDatabase* sharedDB = [[CKContainer defaultContainer] sharedCloudDatabase];
+    
+    [sharedDB fetchAllSubscriptionsWithCompletionHandler:^(NSArray<CKSubscription *> * _Nullable subscriptions, NSError * _Nullable error) {
+        __block BOOL containsDatabaseSubscription = NO;
+        [subscriptions enumerateObjectsUsingBlock:^(CKSubscription * _Nonnull subscription, NSUInteger idx, BOOL * _Nonnull stop) {
+            if ([subscription subscriptionType] == CKSubscriptionTypeDatabase) {
+                containsDatabaseSubscription = YES;
+                *stop = YES;
+                
+                DDLogDebug(@"Shared DB Subscription saved");
+                [self _createShareDatabaseSubscriptionSucceed];
+                dispatch_resume(setupQueue);
+            }
+        }];
+        
+        if (!containsDatabaseSubscription) {
+            CKDatabaseSubscription *subscription = [[CKDatabaseSubscription alloc] initWithSubscriptionID:CloudKitZoneName];
+            [sharedDB saveSubscription:subscription completionHandler:^(CKSubscription * _Nullable subscription, NSError * _Nullable error) {
+                if (error) {
+                    DDLogError(@"Shared DB subscription failed %@", error);
+                    
+                } else {
+                    DDLogDebug(@"Shared DB Subscription saved");
+                    [self _createShareDatabaseSubscriptionSucceed];
+                }
+                dispatch_resume(setupQueue);
             }];
-
-            // Continue setup
-            [self continueCloudKitFlow];
         }
-        dispatch_resume(setupQueue);
     }];
+}
+
+- (void)_createShareDatabaseSubscriptionSucceed
+{
+    self.needsSubscribeSharedSubscription = NO;
+    
+    // Decrement suspend count.
+    [MyDatabaseManager.cloudKitExtension resume];
+
+    // Put flag in database so we know we can skip this operation next time
+    [databaseConnection asyncReadWriteWithBlock:^(YapDatabaseReadWriteTransaction *transaction) {
+        [transaction setObject:@(YES) forKey:Key_HasShareSubscription inCollection:Collection_CloudKit];
+    }];
+    
+    // Continue setup
+    [self continueCloudKitFlow];
 }
 
 /**
@@ -460,6 +497,247 @@ static NSString *const Key_ServerChangeToken   = @"serverChangeToken";
 #pragma mark Fetching
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+- (void)fetchRecordChangesWithPrevServerChangeToken:(CKServerChangeToken *)prevServerChangeToken
+                                            database:(CKDatabase*)database
+                                   completionHandler:(void (^)(UIBackgroundFetchResult result, BOOL moreComing))completionHandler
+{
+    dispatch_async(fetchQueue, ^{ @autoreleasepool {
+        
+        // Suspend the queue.
+        // We will resume it upon completion of the operation.
+        // This ensures that there is only one outstanding fetchRecordsOperation at a time.
+        dispatch_suspend(fetchQueue);
+        
+        [self _fetchRecordChangesWithPrevServerChangeToken:prevServerChangeToken
+                                                  database:database
+                                         completionHandler:completionHandler];
+    }});
+}
+
+- (void)_fetchRecordChangesWithPrevServerChangeToken:(CKServerChangeToken *)prevServerChangeToken
+                                            database:(CKDatabase*)database
+                                   completionHandler:(void (^)(UIBackgroundFetchResult result, BOOL moreComing))completionHandler
+{
+    __block NSMutableDictionary<CKRecordZoneID*, CKFetchRecordZoneChangesOptions*>* options = [[NSMutableDictionary<CKRecordZoneID*, CKFetchRecordZoneChangesOptions*> alloc] init];
+    __block NSMutableArray<CKRecordZoneID*> *deletedZoneIDs = [[NSMutableArray alloc] init];
+    __block NSMutableArray<CKRecordZoneID*> *changedZoneIDs = [[NSMutableArray alloc] init];
+    CKFetchDatabaseChangesOperation* operation = [[CKFetchDatabaseChangesOperation alloc] initWithPreviousServerChangeToken:prevServerChangeToken];
+    operation.fetchAllChanges = YES;
+    operation.recordZoneWithIDChangedBlock = ^(CKRecordZoneID* zoneID) {
+        [changedZoneIDs addObject:zoneID];
+        [databaseConnection readWithBlock:^(YapDatabaseReadTransaction * _Nonnull transaction) {
+            options[zoneID] = [transaction objectForKey:Key_ZoneChangeToken(zoneID) inCollection:Collection_CloudKit];
+        }];
+    };
+    operation.recordZoneWithIDWasDeletedBlock = ^(CKRecordZoneID* zoneID) {
+        [deletedZoneIDs addObject:zoneID];
+    };
+    operation.fetchDatabaseChangesCompletionBlock = ^(CKServerChangeToken* serverChangeToken, BOOL moreComing, NSError* _Nullable operationError){
+        [self _fetchRecordChangesWithPrevServerChangeToken:prevServerChangeToken
+                                      newServerChangeToken:serverChangeToken
+                                                  database:database
+                                             recordZoneIDs:changedZoneIDs
+                                      recordZoneIDsOptions:options
+                                         completionHandler:completionHandler];
+    };
+    [database addOperation:operation];
+}
+
+- (void)_fetchRecordChangesWithPrevServerChangeToken:(CKServerChangeToken *)prevServerChangeToken
+                                newServerChangeToken:(CKServerChangeToken *)newServerChangeToken
+                                            database:(CKDatabase*)database
+                                       recordZoneIDs:(NSArray<CKRecordZoneID*>*)recordZoneIds
+                                recordZoneIDsOptions:(NSMutableDictionary<CKRecordZoneID*, CKFetchRecordZoneChangesOptions*>*)options
+                                   completionHandler:(void (^)(UIBackgroundFetchResult result, BOOL moreComing))completionHandler
+{
+    DDLogDebug(@"Fetch change from Record Zones: %@", recordZoneIds);
+    if ([recordZoneIds count] == 0) {
+        DDLogVerbose(@"No change in database: %@", database);
+        if (completionHandler) {
+            completionHandler(UIBackgroundFetchResultNoData, NO);
+        }
+        dispatch_resume(fetchQueue);
+        return;
+    }
+
+    __block NSMutableArray<CKRecordID*> *deletedRecordIDs = [[NSMutableArray alloc] init];
+    __block NSMutableArray<CKRecord*> *changedRecords = [[NSMutableArray alloc] init];
+    __block NSMutableDictionary<CKRecordZoneID*, CKServerChangeToken*>* serverChangeTokens = [[NSMutableDictionary<CKRecordZoneID*, CKServerChangeToken*> alloc] init];
+
+    CKFetchRecordZoneChangesOperation* operation = [[CKFetchRecordZoneChangesOperation alloc] initWithRecordZoneIDs:recordZoneIds
+                                                                                              optionsByRecordZoneID:options];
+    operation.fetchAllChanges = YES;
+    operation.recordChangedBlock = ^(CKRecord * record){
+        [changedRecords addObject:record];
+    };
+    operation.recordWithIDWasDeletedBlock = ^(CKRecordID *recordID, NSString *recordType){
+        [deletedRecordIDs addObject:recordID];
+    };
+    operation.recordZoneChangeTokensUpdatedBlock = ^(CKRecordZoneID *recordZoneID, CKServerChangeToken * _Nullable serverChangeToken, NSData * _Nullable clientChangeTokenData) {
+        serverChangeTokens[recordZoneID] = serverChangeToken;
+    };
+    operation.fetchRecordZoneChangesCompletionBlock = ^(NSError * _Nullable operationError) {
+        BOOL hasChanges = NO;
+        if (!operationError)
+        {
+            if (deletedRecordIDs.count > 0)
+                hasChanges = YES;
+            else if (changedRecords.count > 0)
+                hasChanges = YES;
+            
+            self.lastSuccessfulFetchResultWasNoData = !hasChanges;
+        }
+        
+        if (operationError)
+        {
+            // I've seen:
+            //
+            // - CKErrorNotAuthenticated - "CloudKit access was denied by user settings"; Retry after 3.0 seconds
+            
+            DDLogError(@"CKFetchRecordChangesOperation: operationError: %@", operationError);
+            
+            NSInteger ckErrorCode = operationError.code;
+            
+            if (ckErrorCode == CKErrorChangeTokenExpired)
+            {
+                // CKErrorChangeTokenExpired:
+                //   The previousServerChangeToken value is too old and the client must re-sync from scratch.
+                
+                [databaseConnection asyncReadWriteWithBlock:^(YapDatabaseReadWriteTransaction *transaction) {
+                    [transaction removeObjectForKey:Key_ServerChangeToken inCollection:Collection_CloudKit];
+                }];
+            }
+            
+            if (completionHandler) {
+                completionHandler(UIBackgroundFetchResultFailed, NO);
+            }
+            dispatch_resume(fetchQueue);
+        }
+        else if (!hasChanges)
+        {
+            DDLogVerbose(@"CKFetchRecordChangesOperation: !hasChanges");
+            if (completionHandler) {
+                completionHandler(UIBackgroundFetchResultNoData, NO);
+            }
+            dispatch_resume(fetchQueue);
+        }
+        else // if (hasChanges)
+        {
+            DDLogVerbose(@"CKFetchRecordChangesOperation: deletedRecordIDs: %@", deletedRecordIDs);
+            DDLogVerbose(@"CKFetchRecordChangesOperation: changedRecords: %@", changedRecords);
+            
+            [databaseConnection asyncReadWriteWithBlock:^(YapDatabaseReadWriteTransaction *transaction) {
+                NSString* databaseIdentifier = CloudKitHelpers_DatabaseIdentifierWithDatabase(database);
+
+                // Remove the items that were deleted (by another device)
+                for (CKRecordID *recordID in deletedRecordIDs)
+                {
+                    NSArray *collectionKeys =
+                    [[transaction ext:Ext_CloudKit] collectionKeysForRecordID:recordID
+                                                           databaseIdentifier:databaseIdentifier];
+                    
+                    for (YapCollectionKey *ck in collectionKeys)
+                    {
+                        // This MUST go FIRST
+                        [[transaction ext:Ext_CloudKit] detachRecordForKey:ck.key
+                                                              inCollection:ck.collection
+                                                         wasRemoteDeletion:YES
+                                                      shouldUploadDeletion:NO];
+                        
+                        // This MUST go SECOND
+                        [transaction removeObjectForKey:ck.key inCollection:ck.collection];
+                    }
+                }
+                
+                // Update the items that were modified (by another device)
+                for (CKRecord *record in changedRecords)
+                {
+                    if (![record.recordType isEqualToString:@"todo"])
+                    {
+                        // Ignore unknown record types.
+                        // These are probably from a future version that this version doesn't support.
+                        continue;
+                    }
+                    
+                    NSString *recordChangeTag = nil;
+                    BOOL hasPendingModifications = NO;
+                    BOOL hasPendingDelete = NO;
+                    
+                    [[transaction ext:Ext_CloudKit] getRecordChangeTag:&recordChangeTag
+                                               hasPendingModifications:&hasPendingModifications
+                                                      hasPendingDelete:&hasPendingDelete
+                                                           forRecordID:record.recordID
+                                                    databaseIdentifier:databaseIdentifier];
+                    
+                    if (recordChangeTag)
+                    {
+                        if ([recordChangeTag isEqualToString:record.recordChangeTag])
+                        {
+                            // We're the one who changed this record.
+                            // So we can quietly ignore it.
+                        }
+                        else
+                        {
+                            [[transaction ext:Ext_CloudKit] mergeRecord:record databaseIdentifier:databaseIdentifier];
+                        }
+                    }
+                    else if (hasPendingModifications)
+                    {
+                        // We're not actively managing this record anymore (we deleted/detached it).
+                        // But there are still previous modifications that are pending upload to server.
+                        // So this merge is required in order to keep everything running properly (no infinite loops).
+                        
+                        [[transaction ext:Ext_CloudKit] mergeRecord:record databaseIdentifier:databaseIdentifier];
+                    }
+                    else if (!hasPendingDelete)
+                    {
+                        MyTodo *newTodo = [[MyTodo alloc] initWithRecord:record];
+                        
+                        NSString *key = newTodo.uuid;
+                        NSString *collection = Collection_Todos;
+                        
+                        // This MUST go FIRST
+                        [[transaction ext:Ext_CloudKit] attachRecord:record
+                                                  databaseIdentifier:databaseIdentifier
+                                                              forKey:key
+                                                        inCollection:collection
+                                                  shouldUploadRecord:NO];
+                        
+                        // This MUST go SECOND
+                        [transaction setObject:newTodo forKey:newTodo.uuid inCollection:Collection_Todos];
+                    }
+                }
+                
+                // And save the serverChangeToken (in the same atomic transaction)
+                [transaction setObject:newServerChangeToken
+                                forKey:Key_ServerChangeToken
+                          inCollection:Collection_CloudKit];
+
+                // And save the per zone change token
+                [serverChangeTokens enumerateKeysAndObjectsUsingBlock:^(CKRecordZoneID * _Nonnull zoneID, CKServerChangeToken * _Nonnull newServerChangeToken, BOOL * _Nonnull stop) {
+                    [transaction setObject:newServerChangeToken
+                                    forKey:Key_ZoneChangeToken(zoneID)
+                              inCollection:Collection_CloudKit];
+                }];
+                
+            } completionBlock:^{
+                
+                if (completionHandler) {
+                    if (hasChanges)
+                        completionHandler(UIBackgroundFetchResultNewData, NO);
+                    else
+                        completionHandler(UIBackgroundFetchResultNoData, NO);
+                }
+
+                dispatch_resume(fetchQueue);
+            }];
+            
+        } // end if (hasChanges)
+
+    };
+    [database addOperation:operation];
+}
+
 /**
  * This method uses CKFetchRecordChangesOperation to fetch changes.
  * It continues fetching until its reported that we're caught up.
@@ -467,8 +745,7 @@ static NSString *const Key_ServerChangeToken   = @"serverChangeToken";
  * This method is invoked once automatically, when the CloudKitManager is initialized.
  * After that, one should invoke it anytime a corresponding push notification is received.
 **/
-- (void)fetchRecordChangesWithCompletionHandler:
-        (void (^)(UIBackgroundFetchResult result, BOOL moreComing))completionHandler
+- (void)fetchRecordChangesWithCompletionHandler:(void (^)(UIBackgroundFetchResult result, BOOL moreComing))completionHandler
 {
 	dispatch_async(fetchQueue, ^{ @autoreleasepool {
 	
@@ -481,252 +758,16 @@ static NSString *const Key_ServerChangeToken   = @"serverChangeToken";
 	}});
 }
 
-- (void)_fetchRecordChangesWithCompletionHandler:
-        (void (^)(UIBackgroundFetchResult result, BOOL moreComing))completionHandler
+- (void)_fetchRecordChangesWithCompletionHandler:(void (^)(UIBackgroundFetchResult result, BOOL moreComing))completionHandler
 {
 	__block CKServerChangeToken *prevServerChangeToken = nil;
 	[databaseConnection asyncReadWithBlock:^(YapDatabaseReadTransaction *transaction) {
-		
 		prevServerChangeToken = [transaction objectForKey:Key_ServerChangeToken inCollection:Collection_CloudKit];
-		
 	} completionBlock:^{
-		
 		[self _fetchRecordChangesWithPrevServerChangeToken:prevServerChangeToken
-		                                 completionHandler:completionHandler];
+                                                  database:[[CKContainer defaultContainer] privateCloudDatabase]
+                                         completionHandler:completionHandler];
 	}];
-}
-
-- (void)_fetchRecordChangesWithPrevServerChangeToken:(CKServerChangeToken *)prevServerChangeToken
-								  completionHandler:
-        (void (^)(UIBackgroundFetchResult result, BOOL moreComing))completionHandler
-{
-	CKRecordZoneID *recordZoneID =
-	  [[CKRecordZoneID alloc] initWithZoneName:CloudKitZoneName ownerName:CKOwnerDefaultName];
-	
-	CKFetchRecordChangesOperation *operation =
-	  [[CKFetchRecordChangesOperation alloc] initWithRecordZoneID:recordZoneID
-	                                    previousServerChangeToken:prevServerChangeToken];
-	
-	__block NSMutableArray *deletedRecordIDs = nil;
-	__block NSMutableArray *changedRecords = nil;
-	
-	operation.recordWithIDWasDeletedBlock = ^(CKRecordID *recordID){
-		
-		if (deletedRecordIDs == nil)
-			deletedRecordIDs = [[NSMutableArray alloc] init];
-		
-		[deletedRecordIDs addObject:recordID];
-	};
-	
-	operation.recordChangedBlock = ^(CKRecord *record){
-		
-		if (changedRecords == nil)
-			changedRecords = [[NSMutableArray alloc] init];
-		
-		[changedRecords addObject:record];
-	};
-	
-	__weak CKFetchRecordChangesOperation *weakOperation = operation;
-	operation.fetchRecordChangesCompletionBlock =
-	^(CKServerChangeToken *newServerChangeToken, NSData *clientChangeTokenData, NSError *operationError){
-		
-		DDLogVerbose(@"CKFetchRecordChangesOperation.fetchRecordChangesCompletionBlock");
-		
-		DDLogVerbose(@"CKFetchRecordChangesOperation: serverChangeToken: %@", newServerChangeToken);
-		DDLogVerbose(@"CKFetchRecordChangesOperation: clientChangeTokenData: %@", clientChangeTokenData);
-		
-		// Edge Case:
-		//
-		// I've witnessed the following on a fresh app launch on the device (first run after install):
-		// The first fetchRecordChanges returns:
-		// - no deletedRecordIDs
-		// - no changedRecords
-		// - a serverChangeToken
-		// - and moreComing == YES
-		//
-		// So, oddly enough, this results in (UIBackgroundFetchResultNoData, moreComing==YES).
-		//
-		// Which seems non-intuitive to me, but that's what we're getting from the server.
-		// And, in fact, if we don't follow that up with another fetch,
-		// then we fail to properly fetch what's on the server.
-		
-		BOOL moreComing = weakOperation.moreComing;
-		
-		BOOL hasChanges = NO;
-		if (!operationError)
-		{
-			if (deletedRecordIDs.count > 0)
-				hasChanges = YES;
-			else if (changedRecords.count > 0)
-				hasChanges = YES;
-			
-			self.lastSuccessfulFetchResultWasNoData = (!hasChanges && !moreComing);
-		}
-		
-		if (operationError)
-		{
-			// I've seen:
-			//
-			// - CKErrorNotAuthenticated - "CloudKit access was denied by user settings"; Retry after 3.0 seconds
-			
-			DDLogError(@"CKFetchRecordChangesOperation: operationError: %@", operationError);
-			
-			NSInteger ckErrorCode = operationError.code;
-			
-			if (ckErrorCode == CKErrorChangeTokenExpired)
-			{
-				// CKErrorChangeTokenExpired:
-				//   The previousServerChangeToken value is too old and the client must re-sync from scratch.
-				
-				[databaseConnection asyncReadWriteWithBlock:^(YapDatabaseReadWriteTransaction *transaction) {
-					
-					[transaction removeObjectForKey:Key_ServerChangeToken inCollection:Collection_CloudKit];
-				}];
-			}
-			
-			if (completionHandler) {
-				completionHandler(UIBackgroundFetchResultFailed, NO);
-			}
-			dispatch_resume(fetchQueue);
-		}
-		else if (!hasChanges && !moreComing)
-		{
-			DDLogVerbose(@"CKFetchRecordChangesOperation: !hasChanges && !moreComing");
-			
-			// Just to be safe, we're going to go ahead and save the newServerChangeToken.
-			//
-			// By the way:
-			// - The CKServerChangeToken class has no API
-			// - Comparing two serverChangeToken's via isEqual doesn't work
-			// - Archiving two serverChangeToken's into NSData, and comparing that doesn't work either
-			
-			[databaseConnection asyncReadWriteWithBlock:^(YapDatabaseReadWriteTransaction *transaction) {
-				
-				[transaction setObject:newServerChangeToken
-				                forKey:Key_ServerChangeToken
-				          inCollection:Collection_CloudKit];
-			}];
-			
-			if (completionHandler) {
-				completionHandler(UIBackgroundFetchResultNoData, NO);
-			}
-			dispatch_resume(fetchQueue);
-		}
-		else // if (hasChanges || moreComing)
-		{
-			DDLogVerbose(@"CKFetchRecordChangesOperation: deletedRecordIDs: %@", deletedRecordIDs);
-			DDLogVerbose(@"CKFetchRecordChangesOperation: changedRecords: %@", changedRecords);
-			
-			[databaseConnection asyncReadWriteWithBlock:^(YapDatabaseReadWriteTransaction *transaction) {
-				
-				// Remove the items that were deleted (by another device)
-				for (CKRecordID *recordID in deletedRecordIDs)
-				{
-					NSArray *collectionKeys =
-					  [[transaction ext:Ext_CloudKit] collectionKeysForRecordID:recordID
-					                                         databaseIdentifier:nil];
-					
-					for (YapCollectionKey *ck in collectionKeys)
-					{
-						// This MUST go FIRST
-						[[transaction ext:Ext_CloudKit] detachRecordForKey:ck.key
-						                                      inCollection:ck.collection
-						                                 wasRemoteDeletion:YES
-						                              shouldUploadDeletion:NO];
-						
-						// This MUST go SECOND
-						[transaction removeObjectForKey:ck.key inCollection:ck.collection];
-					}
-				}
-				
-				// Update the items that were modified (by another device)
-				for (CKRecord *record in changedRecords)
-				{
-					if (![record.recordType isEqualToString:@"todo"])
-					{
-						// Ignore unknown record types.
-						// These are probably from a future version that this version doesn't support.
-						continue;
-					}
-					
-					NSString *recordChangeTag = nil;
-					BOOL hasPendingModifications = NO;
-					BOOL hasPendingDelete = NO;
-					
-					[[transaction ext:Ext_CloudKit] getRecordChangeTag:&recordChangeTag
-					                           hasPendingModifications:&hasPendingModifications
-					                                  hasPendingDelete:&hasPendingDelete
-					                                       forRecordID:record.recordID
-					                                databaseIdentifier:nil];
-					
-					if (recordChangeTag)
-					{
-						if ([recordChangeTag isEqualToString:record.recordChangeTag])
-						{
-							// We're the one who changed this record.
-							// So we can quietly ignore it.
-						}
-						else
-						{
-							[[transaction ext:Ext_CloudKit] mergeRecord:record databaseIdentifier:nil];
-						}
-					}
-					else if (hasPendingModifications)
-					{
-						// We're not actively managing this record anymore (we deleted/detached it).
-						// But there are still previous modifications that are pending upload to server.
-						// So this merge is required in order to keep everything running properly (no infinite loops).
-						
-						[[transaction ext:Ext_CloudKit] mergeRecord:record databaseIdentifier:nil];
-					}
-					else if (!hasPendingDelete)
-					{
-						MyTodo *newTodo = [[MyTodo alloc] initWithRecord:record];
-						
-						NSString *key = newTodo.uuid;
-						NSString *collection = Collection_Todos;
-						
-						// This MUST go FIRST
-						[[transaction ext:Ext_CloudKit] attachRecord:record
-						                          databaseIdentifier:nil
-						                                      forKey:key
-						                                inCollection:collection
-						                          shouldUploadRecord:NO];
-						
-						// This MUST go SECOND
-						[transaction setObject:newTodo forKey:newTodo.uuid inCollection:Collection_Todos];
-					}
-				}
-				
-				// And save the serverChangeToken (in the same atomic transaction)
-				[transaction setObject:newServerChangeToken
-				                forKey:Key_ServerChangeToken
-				          inCollection:Collection_CloudKit];
-				
-			} completionBlock:^{
-				
-				if (completionHandler)
-				{
-					if (hasChanges)
-						completionHandler(UIBackgroundFetchResultNewData, moreComing);
-					else
-						completionHandler(UIBackgroundFetchResultNoData, moreComing);
-				}
-				
-				if (moreComing) {
-					[self _fetchRecordChangesWithCompletionHandler:completionHandler];
-				}
-				else {
-					dispatch_resume(fetchQueue);
-				}
-			}];
-		
-		} // end if (hasChanges)
-	};
-	
-	operation.allowsCellularAccess = YES;
-	
-	[[[CKContainer defaultContainer] privateCloudDatabase] addOperation:operation];
 }
 
 /**

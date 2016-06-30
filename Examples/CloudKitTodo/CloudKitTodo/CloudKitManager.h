@@ -2,13 +2,15 @@
 #import <UIKit/UIKit.h>
 
 @class CloudKitManager;
+@class CKDatabase;
 
 /**
  * You can use this as an alternative to the sharedInstance:
  * [[CloudKitManager sharedInstance] foobar] -> MyCloudKitManager.foobar
 **/
 extern CloudKitManager *MyCloudKitManager;
-
+extern NSString* CloudKitManager_DatabaseIdentifierWithDatabase(CKDatabase* database);
+extern CKDatabase* CloudKitManager_DatabaseWithDatabaseIdentifier(NSString* databaseIdentifier);
 
 @interface CloudKitManager : NSObject
 
