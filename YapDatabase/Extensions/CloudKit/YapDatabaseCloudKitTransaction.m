@@ -1066,7 +1066,7 @@ static BOOL ClassVersionsAreCompatible(int oldClassVersion, int newClassVersion)
 	
 	if (dbid)
 	{
-		memcpy(buffer, (void *)'_', 1); // prefix with underscore to differentiate between nil & empty-string
+		//memcpy(buffer, (void *)'_', 1); // prefix with underscore to differentiate between nil & empty-string
 		
 		[dbid getBytes:(buffer + 1)
 		     maxLength:(maxLen - 1)
