@@ -414,20 +414,27 @@ DatabaseManager *MyDatabaseManager;
 			DDLogError(@"Unhandled ckErrorCode: %ld", (long)ckErrorCode);
 		}
 	};
+    
+    YapDatabaseCloudKitDatabaseIdentifierBlock dbIdBlock = ^(NSString *databaseIdentifier) {
+        if ([databaseIdentifier isEqualToString:@"shared"]) {
+            return [[CKContainer defaultContainer] sharedCloudDatabase];
+        }
+        return [[CKContainer defaultContainer] privateCloudDatabase];
+    };
 	
 	NSSet *todos = [NSSet setWithObject:Collection_Todos];
 	YapWhitelistBlacklist *whitelist = [[YapWhitelistBlacklist alloc] initWithWhitelist:todos];
 	
 	YapDatabaseCloudKitOptions *options = [[YapDatabaseCloudKitOptions alloc] init];
 	options.allowedCollections = whitelist;
-	
-	cloudKitExtension = [[YapDatabaseCloudKit alloc] initWithRecordHandler:recordHandler
-	                                                            mergeBlock:mergeBlock
-	                                                   operationErrorBlock:opErrorBlock
-	                                                            versionTag:@"1"
-	                                                           versionInfo:nil
-	                                                               options:options];
-	
+
+    cloudKitExtension = [[YapDatabaseCloudKit alloc] initWithRecordHandler:recordHandler
+                                                                mergeBlock:mergeBlock
+                                                       operationErrorBlock:opErrorBlock
+                                                   databaseIdentifierBlock:dbIdBlock
+                                                                versionTag:@"1"
+                                                               versionInfo:nil
+                                                                   options:options];
 	[cloudKitExtension suspend]; // Create zone(s)
 	[cloudKitExtension suspend]; // Create zone subscription(s)
     [cloudKitExtension suspend]; // Create shared zone subscription(s)
